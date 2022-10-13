@@ -1,6 +1,6 @@
 # TEA
 
-Source code of paper "Exploring Time Information for Entity Alignment", which has been submitted to KDD 2022.
+Source code of paper "TEA: Time-aware Entity Alignment in Knowledge Graphs", which has been submitted to WebConf'2023.
 
 ## Dependencies
 
