@@ -64,12 +64,8 @@ class MultiLayerGCN(nn.Module):
         torch.clamp_max_(adj._values(), 1)
         return adj
 
-    def forward(self, edges, graph_embedding, is_adj=False):
-        if not is_adj:
-            adj = self.preprocess_adj(edges)
-        else:
-            adj = edges
-
+    def forward(self, edges, graph_embedding):
+        adj = self.preprocess_adj(edges)
         for gcn in self.gcn_list:
             graph_embedding = self.dropout(graph_embedding)
             graph_embedding = gcn(adj, graph_embedding)
@@ -88,6 +84,7 @@ class AttributedEncoder(nn.Module):
     def forward(self, attribute_triples, att_feats, val_feats, ent_feats):
         ## fixme: consider not use norisy attribute if all the attribute are noisy
         ## fixme: consider share the attribute importance to all nodes
+
         N = ent_feats.shape[0]
         E = attribute_triples.shape[0]
         device = ent_feats.device

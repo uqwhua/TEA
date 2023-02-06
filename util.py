@@ -3,7 +3,6 @@ import torch
 import numpy as np
 import random
 
-
 def print_time_info(string, end='\n', dash_top=False, dash_bot=False, file=None):
     times = str(time.strftime('%Y-%m-%d %H:%M:%S',
                               time.localtime(time.time())))
@@ -22,9 +21,6 @@ def set_random_seed(seed_value=0, print_info=False):
     np.random.seed(seed_value)  # cpu vars
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed_value)
-        # torch.cuda.manual_seed(seed_value)
-        # torch.backends.cudnn.deterministic = True  # needed
-        # torch.backends.cudnn.benchmark = False
     random.seed(seed_value)
 
 
@@ -85,7 +81,7 @@ def topk(sim, top_k=(1, 10, 50, 100), device='cpu'):
                 batch_sim.shape[0]).reshape((-1, 1)).to(device) + i
             locate = sorted_arg - true_pos
             del sorted_arg, true_pos
-            locate = torch.nonzero(locate == 0, )
+            locate = torch.nonzero(locate == 0,)
             cols = locate[:, 1]  # Cols are ranks
             cols = cols.float()
             mr += float(torch.sum(cols + 1))
@@ -102,3 +98,6 @@ def topk(sim, top_k=(1, 10, 50, 100), device='cpu'):
         if not batched:
             return _opti_topk(sim)
         return _opti_topk_batched(sim)
+
+
+

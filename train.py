@@ -1,16 +1,18 @@
 import torch
+import os
 import numpy as np
 import torch.nn as nn
 from pathlib import Path
 from shutil import rmtree
 import torch.nn.functional as F
 from collections import OrderedDict
-from tqdm import tqdm
-from torch.optim import Adagrad
-
 from load_data import LoadData
 from models import MultiLayerGCN, AttSeq
+from torch.optim import Adagrad
 from util import print_time_info, set_random_seed, get_hits
+from tqdm import tqdm
+
+from time_model import TimeModel
 
 
 def cosine_similarity_nbyn(a, b):
@@ -136,6 +138,9 @@ class GNNChannel(nn.Module):
             self.gnn = AttSeq(layer_num, ent_num_sr, ent_num_tg, dim, drop_out, residual=True, **channels['attribute'])
         if 'name' in channels:
             self.gnn = NameGCN(dim, layer_num, drop_out, **channels['name'])
+        if 'time' in channels:
+            self.gnn = TimeModel(layer_num, ent_num_sr, ent_num_tg, dim, drop_out, residual=True,
+                                 **channels['time'])
 
     def forward(self, sr_ent_seeds, tg_ent_seeds):
         sr_seed_hid, tg_seed_hid, sr_ent_hid, tg_ent_hid = self.gnn.forward(sr_ent_seeds, tg_ent_seeds)
@@ -227,6 +232,7 @@ class AttConf(object):
         self.attribute_value_channel = False
         self.literal_attribute_channel = False
         self.digit_attribute_channel = False
+        self.time_attribute_channel = False
 
         self.load_new_seed_split = False
 
@@ -244,6 +250,8 @@ class AttConf(object):
             self.set_structure_channel(True)
         elif channel_name == 'Name':
             self.set_name_channel(True)
+        elif channel_name == 'Time':
+            self.set_time_channel(True)
         else:
             raise Exception()
 
@@ -261,6 +269,9 @@ class AttConf(object):
 
     def set_digit_attribute_channel(self, use_digit_attribute_channel):
         self.digit_attribute_channel = use_digit_attribute_channel
+
+    def set_time_channel(self, use_time_attribute_channel):
+        self.time_attribute_channel = use_time_attribute_channel
 
     def set_literal_attribute_channel(self, use_literal_attribute_channel):
         self.literal_attribute_channel = use_literal_attribute_channel
@@ -306,17 +317,11 @@ class AttConf(object):
         self.loaded_data = LoadData(self.train_seeds_ratio, self.directory, self.nega_sample_num,
                                     name_channel=self.name_channel, attribute_channel=self.attribute_value_channel,
                                     digit_literal_channel=self.digit_attribute_channel or self.literal_attribute_channel,
+                                    time_channel=self.time_attribute_channel,
                                     load_new_seed_split=self.load_new_seed_split, device=device)
         self.sr_ent_num = self.loaded_data.sr_ent_num
         self.tg_ent_num = self.loaded_data.tg_ent_num
         self.att_num = self.loaded_data.att_num
-
-        #print('ent_num:', self.sr_ent_num, self.tg_ent_num)
-        #print('rel-facts:', len(self.loaded_data.triples_sr), len(self.loaded_data.triples_tg))
-        #print('char-facts:', len(self.loaded_data.literal_triples_sr), len(self.loaded_data.literal_triples_tg))
-        #print('dig-facts:', len(self.loaded_data.digital_triples_sr), len(self.loaded_data.digital_triples_tg))
-        # print('time-facts:', len(self.loaded_data.time_triples_sr), len(self.loaded_data.time_triples_tg))
-
 
         # Init graph adjacent matrix
         print_time_info('Begin preprocessing adjacent matrix')
@@ -351,11 +356,22 @@ class AttConf(object):
                                           'attribute_triples_sr': self.loaded_data.digital_triples_sr,
                                           'attribute_triples_tg': self.loaded_data.digital_triples_tg,
                                           'value_embedding': self.loaded_data.digit_value_embedding}
+        if self.time_attribute_channel:
+            self.channels['time'] = {'edges_sr': edges_sr, 'edges_tg': edges_tg,
+                                     'att_num': self.loaded_data.time_att_num,
+                                     'attribute_triples_sr': self.loaded_data.time_triples_sr,
+                                     'attribute_triples_tg': self.loaded_data.time_triples_tg,
+                                     'value_embedding': self.loaded_data.time_value_embedding,
+                                     'time_graph': self.loaded_data.time_graph
+                                     }
+            self.time_att2id = self.loaded_data.time_att2id
+
         print_time_info('Finished preprocesssing adjacent matrix')
 
     def train(self, device):
         set_random_seed()
         self.loaded_data.negative_sample()
+
         # Compose Graph NN
         gnn_channel = GNNChannel(self.sr_ent_num, self.tg_ent_num, self.dim, self.layer_num, self.drop_out,
                                  self.channels)
@@ -441,7 +457,8 @@ class AttConf(object):
         print_time_info("Model is saved to directory: %s." % str(self.log_dir))
 
 
-def grid_search(log_comment, data_set, layer_num, device, load_new_seed_split=False, save_model=False,
+def grid_search(log_comment, data_set, layer_num, device, load_new_seed_split=False,
+                save_model=False,
                 l2_regularization_range=(0, 1e-4, 1e-3), learning_rate_range=(1e-3, 4e-3, 7e-3), ):
     # attribute + gcn literal:  Current best hit@1 42.90 at 100 epoch with (0.006, 0, 0)
     # BERT digit channel, 17% at (0.006, 0, 0.0001)
@@ -453,7 +470,7 @@ def grid_search(log_comment, data_set, layer_num, device, load_new_seed_split=Fa
     att_conf.layer_num = layer_num
     att_conf.set_log_comment(log_comment)
     att_conf.set_load_new_seed_split(load_new_seed_split)
-    att_conf.init('%s' % data_set, device)
+    att_conf.init('./bin/%s' % data_set, device)
 
     data_set = data_set.split('/')[-1]
     best_hit_1 = 0
@@ -502,25 +519,23 @@ def grid_search(log_comment, data_set, layer_num, device, load_new_seed_split=Fa
 
 if __name__ == '__main__':
     '''
-    python train_subgraph.py --dataset DBP15k/zh_en --channel Literal --gpu_id 5 --load_hard_split
+    python train.py --dataset DBP15k/zh_en --channel Literal --gpu_id 5 --load_hard_split
     '''
 
     import argparse
 
-    default_dataset = './bin/DBP15k/fr_en'
     parser = argparse.ArgumentParser()
-    parser.add_argument('--channel', type=str, default='all')  # all,Literal,Digital,Structure,Name
-    parser.add_argument('--gpu_id', type=int, default=2)
-    parser.add_argument('--dataset', type=str, default=default_dataset)
-    parser.add_argument('--load_hard_split', default=True)
+    parser.add_argument('--channel', type=str, default='all')
+    parser.add_argument('--gpu_id', type=int, required=True)
+    parser.add_argument('--dataset', type=str, required=True)
+    parser.add_argument('--load_hard_split', action='store_true')
     parser.add_argument('--layer_num', type=int, default=2)
     args = parser.parse_args()
-
     import os
 
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
-    # device = 'cuda:%d' % args.gpu_id if args.gpu_id >= 0 else 'cpu'
+    # device = 'cuda:%d' % args.gpu_id if args.gpu_id >= 0 else 'cpu' 
     device = 'cuda:0'
     if args.channel == 'all':
         grid_search('Literal', args.dataset, args.layer_num, device, load_new_seed_split=args.load_hard_split,
@@ -530,7 +545,9 @@ if __name__ == '__main__':
         grid_search('Structure', args.dataset, args.layer_num, device, load_new_seed_split=args.load_hard_split,
                     save_model=True, )  # learning_rate_range=[0.004,], l2_regularization_range=[0.0001])
         grid_search('Name', args.dataset, args.layer_num, device, load_new_seed_split=args.load_hard_split,
-                    save_model=True, )  # learning_rate_range=[0.004,], l2_regularization_range=[0.0001])
+                    save_model=True)  # learning_rate_range=[0.004,], l2_regularization_range=[0.0001])
+        grid_search('Time', args.dataset, args.layer_num, device, load_new_seed_split=args.load_hard_split,
+                    save_model=True)
     else:
         grid_search(args.channel, args.dataset, args.layer_num, device, load_new_seed_split=args.load_hard_split,
-                    save_model=True, )  # learning_rate_range=[0.007,], l2_regularization_range=[0.001])
+                    save_model=True)

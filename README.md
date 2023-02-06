@@ -1,39 +1,47 @@
-# TEA
+# TEA: Time-aware Entity Alignment in Knowledge Graphs
 
-Source code of paper "TEA: Time-aware Entity Alignment in Knowledge Graphs", which has been submitted to WebConf'2023.
+The code of our WWW2023 paper TEA: Time-aware Entity Alignment in Knowledge Graphs
 
-## Dependencies
-
+## Environment and Dependencies
 * Python 3
 * [PyTorch >= 1.0](https://pytorch.org/get-started/locally/)
 * [Scikit Learn](https://scikit-learn.org/stable/)
 * [huggingface/transformers == 1.1.0](https://github.com/huggingface/transformers)
+* torch-geometric
 
-## Code
-
-Step 1. Run the following script to train all the subgraphs.
+create a new environment
 ```bash
-# Example
->> python -u dev_train_subgraph.py --gpu_id=-1 --dataset='yg_dbp' --datadir='DWY100k' --hard=0 --channel all
+conda create --name exp python=3.9
+
+# install pytorch
+conda install pytorch torchvision torchaudio pytorch-cuda=11.6 -c pytorch -c nvidia
+
+# install BERT
+conda install -c huggingface transformers
+
+# other tools
+pip install -U scikit-learn
+pip install torch-geometric
+conda install pytorch-sparse -c pyg
 ```
 
-Step 2. Run the following script for ensemble.
+## Results
+
+1. Run the following scripts to train the alignment model on all kinds of information.
 ```bash
-# Example
->> python -u dev_ensemble_subgraphs.py --gpu_id=-1 --dataset='yg_dbp' --datadir='DWY100k'
+# train
+python train.py --gpu_id 0 --channel all --dataset DBP15k/ja_en --load_hard_split 
+
+# evaluate
+python evaluate.py --gpu_id 0 --dataset DBP15k/ja_en --load_hard_split 
 ```
+\
+Channels: {Digital, Literal, Structure, Name, Time}
 
-Channel: {Digital, Literal, Structure, Name, Time, All}
-
-Dataset: {zh_en, fr_en, ja_en, wd_dbp, yg_dbp}
-
-Datadir: {DBP15k, DWY100k}
-
-Download the [Word2Vec file](https://dl.fbaipublicfiles.com/fasttext/vectors-english/wiki-news-300d-1M.vec.zip) for initializing the corresponding name/relation/attributes embeddings.
-
+Datasets: {DBP15k/ja_en, DBP15k/fr_en, DBP15k/zh_en, DWY100k/wd_dbp, DWY100k/yg_dbp}
 
 ## Datasets
+Download all the datasets from [OneDrive](https://1drv.ms/u/s!AnRJvk5zSd0HgXKsFQ1vEaYxO7FX?e=2MnJyP) and unzip it under the current folder.
 
-Download the original DBP15K and DWY100K datasets from [here](https://1drv.ms/u/s!AuQRz5abAH5T2jDOmiMlkqFP8s0Z?e=V6wNWS).
 
-Download the [hard setting](https://aclanthology.org/2020.emnlp-main.515/) DBP15K datasets from [here](https://1drv.ms/u/s!AuQRz5abAH5T3EWhCpZrw24jTOrm?e=ufjzfW).
+

@@ -5,132 +5,12 @@ import random
 import numpy as np
 from datetime import datetime
 from util import print_time_info
-from pytorch_transformers import BertTokenizer, BertModel
-# from transformers import AutoTokenizer, AutoModel
-from tqdm import tqdm
+from transformers import BertTokenizer, BertModel
 
-
-class BERT(object):
-    # For entity alignment, the best layer is 1
-    def __init__(self):
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-cased', do_lower_case=False)
-        self.model = BertModel.from_pretrained('bert-base-cased', output_hidden_states=True)
-        self.model.eval()
-        self.pad_token_id = self.tokenizer.encode(self.tokenizer.pad_token)[0]
-        self.cls_token_id = self.tokenizer.encode(self.tokenizer.cls_token)[0]
-        self.sep_token_id = self.tokenizer.encode(self.tokenizer.sep_token)[0]
-        self.device = 'cpu'
-
-    def to(self, device):
-        self.device = device
-        self.model.to(device)
-
-    def pooled_encode_batched(self, sentences, batch_size=512, layer=1, save_gpu_memory=False):
-        # Split the sentences into batches and further encode
-        sent_batch = [sentences[i:i + batch_size] for i in range(0, len(sentences), batch_size)]
-        outputs = []
-        for batch in tqdm(sent_batch):
-            out = self.pooled_bert_encode(batch, layer)
-            if save_gpu_memory:
-                out = out.cpu()
-            outputs.append(out)
-        outputs = torch.cat(outputs, dim=0)
-        return outputs
-
-    def pooled_bert_encode(self, sentences, layer=1):
-        required_layer_hidden_state, sent_lens = self.bert_encode(sentences, layer)
-        required_layer_hidden_state = minus_mask(required_layer_hidden_state, sent_lens.to(self.device))
-        # Max pooling
-        required_layer_hidden_state, indices = torch.max(required_layer_hidden_state, dim=1, keepdim=False)
-        return required_layer_hidden_state
-
-    def bert_encode(self, sentences, layer=1):
-        # layer: output the max pooling over the designated layer hidden state
-
-        # Limit batch size to avoid exceed gpu memory limitation
-        sent_num = len(sentences)
-        assert sent_num <= 512
-
-        ## The 382 is to avoid exceed bert's maximum seq_len and to save memory
-        sentences = [[self.cls_token_id] + self.tokenizer.encode(sent)[:382] + [self.sep_token_id] for sent in
-                     sentences]
-        sent_lens = [len(sent) for sent in sentences]
-        max_len = max(sent_lens)
-        sent_lens = torch.tensor(sent_lens)
-        sentences = torch.tensor([sent + (max_len - len(sent)) * [self.pad_token_id] for sent in sentences]).to(
-            self.device)
-        with torch.no_grad():
-            last_hidden_state, pooled_output, all_hidden_state = self.model(sentences)
-        assert len(all_hidden_state) == 13
-        required_layer_hidden_state = all_hidden_state[layer]
-        return required_layer_hidden_state, sent_lens
-
-
-# class BERT(object):
-#     # For entity alignment, the best layer is 1
-#     def __init__(self):
-#         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
-#         self.model = AutoModel.from_pretrained("bert-base-cased")
-#         self.model.eval()
-
-#     def to(self, device):
-#         self.model.to(device)
-
-#     def cpu(self):
-#         self.model.cpu()
-
-#     def pooled_encode_batched(self, sentences, batch_size=512, layer=1, save_gpu_memory=False):
-#         # Split the sentences into batches and further encode
-#         sent_batch = [sentences[i:i + batch_size] for i in range(0, len(sentences), batch_size)]
-#         outputs = []
-#         for batch in tqdm(sent_batch):
-#             out = self.pooled_bert_encode(batch, layer)
-#             if save_gpu_memory:
-#                 out = out.cpu()
-#             outputs.append(out)
-#         outputs = torch.cat(outputs, dim=0)
-#         return outputs
-
-#     def pooled_bert_encode(self, sentences, layer=1):
-#         required_layer_hidden_state, sent_lens = self.bert_encode(sentences, layer)
-#         required_layer_hidden_state = minus_mask(required_layer_hidden_state, sent_lens)
-#         # Max pooling
-#         required_layer_hidden_state, indices = torch.max(required_layer_hidden_state, dim=1, keepdim=False)
-#         return required_layer_hidden_state
-
-#     @torch.no_grad()
-#     def bert_encode(self, sentences, layer=1):
-#         # layer: output the max pooling over the designated layer hidden state
-#         device = next(self.model.parameters()).device
-#         assert len(sentences) <= 512
-#         tokenizer = self.tokenizer
-#         encoded_sentences = tokenizer.batch_encode_plus(sentences, padding='longest', return_tensors='pt', truncation=True)
-#         input_ids, attention_mask = encoded_sentences['input_ids'], encoded_sentences['attention_mask']
-#         sent_lens = torch.sum(attention_mask, dim=1).to(device)
-#         last_hidden_state, pooled_output, all_hidden_states = self.model.forward(input_ids.to(device), attention_mask.to(device), output_hidden_states=True)
-#         assert len(all_hidden_states) == 13
-#         required_layer_hidden_state = all_hidden_states[layer]
-#         return required_layer_hidden_state, sent_lens
-
-
-def minus_mask(inputs, input_lens):
-    # Inputs shape = (batch_size, sent_len, embed_dim)
-    # input_len shape = [batch_sie]
-    # max_len scalar
-    assert inputs.shape[0] == input_lens.shape[0]
-    assert len(input_lens.shape) == 1
-    assert len(inputs.shape) == 3
-    device = inputs.device
-
-    max_len = torch.max(input_lens)
-    batch_size = inputs.shape[0]
-    mask = torch.arange(max_len).expand(batch_size, max_len).to(device)
-    mask = mask >= input_lens.view(-1, 1)
-    mask = mask.float()
-    mask = mask.reshape(-1, max_len, 1) * (-1e30)
-    # Employ mask
-    inputs = inputs + mask
-    return inputs
+from time_graph import build_value_edges_in_cluster, build_entity_and_value_edges
+from time_graph import build_dynamic_value_edges_in_cluster, build_dynamic_time_graphs
+from cluster import ClusterModel
+from embeddings import BERT, ValueEmbedding, get_cache_file_path
 
 
 def read_mapping(path):
@@ -231,7 +111,7 @@ def _load_trans(directory, language):
 
 def _load_dbpedia_properties(data_path, entity2id, language, filter_alias=False):
     # filter_name: mask all the attribute that is potentially an alias of the entity
-    potential_alias_pattern = ['name', 'alias', '??', '??']
+    potential_alias_pattern = ['name', 'alias', '名字', '别名']
 
     if language in {'en', 'zh', 'ja', 'fr'}:
         Prefix.set_language(language)
@@ -274,6 +154,67 @@ def _get_train_value_and_attribute(train_ent_ids, att_triples):
     return train_value_and_attribute
 
 
+class TimeExpression(object):
+    def __init__(self):
+        self.regex = {'year': re.compile(r'^\d{4}$'), 'date': re.compile(r'^(\d+)-(\d+)-(\d+)$'),
+                      'month_day': re.compile(r'^--(\d{2})-(\d{2})$')}
+        self.regex_func = {'year': lambda x: (int(x.group(0)), None, None),
+                           'date': lambda x: (int(x.group(1)), int(x.group(2)), int(x.group(3))),
+                           'month_day': lambda x: (None, int(x.group(1)), int(x.group(2)))}
+
+    def is_time_exp(self, text):
+        for regex_name in self.regex:
+            is_numeral, result = self.__regex_pattern(text, regex_name)
+            if is_numeral:
+                return is_numeral, result
+        is_numeral, result = self.__month_year_pattern(text)
+        if is_numeral:
+            return is_numeral, result
+        return False, None
+
+    def __regex_pattern(self, text, regex_name):
+        regex = self.regex[regex_name]
+        result = regex.match(text)
+        if result:
+            return True, self.regex_func[regex_name](result)
+        return False, None
+
+    def __month_year_pattern(self, text):
+        try:
+            data = datetime.strptime(text, '%B %Y')
+            return True, (data.year, data.month, None)
+        except ValueError:
+            return False, None
+        except:
+            raise Exception()
+
+    # todo, we can have a more accuarete way to find time expressions
+
+
+def _split_time_attribute(value_and_attribute_pairs, threshold, att_set):
+    time_exp = TimeExpression()
+    att_is_time = {}
+    for value, att_id in value_and_attribute_pairs:
+        # 0 digit, 1 literal
+        is_time_exp, reuslt = time_exp.is_time_exp(value)
+        if att_id in att_is_time:
+            if is_time_exp:
+                att_is_time[att_id][0] += 1
+            else:
+                att_is_time[att_id][1] += 1
+        else:
+            if is_time_exp:
+                att_is_time[att_id] = [1, 0]
+            else:
+                att_is_time[att_id] = [0, 1]
+
+    time_atts = {att for att, count in att_is_time.items() if count[0] / sum(count) > threshold}
+    time_atts = list(time_atts)
+    time_atts.sort()
+    time_att2id = {digit_att: idx for idx, digit_att in enumerate(time_atts)}
+    return time_att2id
+
+
 def _split_digit_attribute_and_literal_attribute(value_and_attribute_pairs, digit_threshold, att_set):
     numeral = Numeral()
     att_is_number = {}
@@ -293,6 +234,7 @@ def _split_digit_attribute_and_literal_attribute(value_and_attribute_pairs, digi
 
     digit_atts = {att for att, count in att_is_number.items() if count[0] / sum(count) > digit_threshold}
     literal_atts = {att for att in att_set if att not in digit_atts}
+
     digit_atts = list(digit_atts)
     digit_atts.sort()
     literal_atts = list(literal_atts)
@@ -300,6 +242,14 @@ def _split_digit_attribute_and_literal_attribute(value_and_attribute_pairs, digi
     digit_att2id = {digit_att: idx for idx, digit_att in enumerate(digit_atts)}
     literal_att2id = {literal_att: idx for idx, literal_att in enumerate(literal_atts)}
     return digit_att2id, literal_att2id
+
+
+def _split_time_triple(att_triples, time_att2id):
+    time_triples = []
+    for ent_id, value, att in att_triples:
+        if att in time_att2id:
+            time_triples.append((ent_id, value, time_att2id[att]))
+    return time_triples
 
 
 def _split_digit_and_literal_triple(att_triples, digit_att2id, literal_att2id):
@@ -317,61 +267,11 @@ def _split_digit_and_literal_triple(att_triples, digit_att2id, literal_att2id):
     return digit_triples, literal_triples
 
 
-def get_cache_file_path(temp_file_dir, attribute_channel_name):
-    if not temp_file_dir.exists():
-        temp_file_dir.mkdir()
-    assert attribute_channel_name in {'Literal', 'Digit', 'Attribute', 'Time', 'Test'}
-    embedding_file_name = 'value_embedding'
-    id2values_file_name = 'id2value'
-    embedding_file_name = '%s_%s' % (embedding_file_name, attribute_channel_name)
-    id2values_file_name = '%s_%s' % (id2values_file_name, attribute_channel_name)
-    embedding_file_path = temp_file_dir / ('%s.npy' % embedding_file_name)
-    id2values_file_path = temp_file_dir / ('%s.json' % id2values_file_name)
-    return embedding_file_path, id2values_file_path
-
-
-class ValueEmbedding(object):
-    def __init__(self, device):
-        self.bert = BERT()
-        self.bert.to(device)
-
-    def encode_value(self, value_seqs):
-        value2id = {}
-        for value_seq in value_seqs:
-            for value in value_seq:
-                if value not in value2id:
-                    value2id[value] = len(value2id)
-        # Add the [PAD] token for value embeddings
-        value2id[self.bert.tokenizer.pad_token] = len(value2id)
-
-        ## id2value is a sequence of English text
-        id2value = sorted(value2id.items(), key=lambda x: x[1])
-        id2value = [item[0] for item in id2value]  # it is a list
-        best_layer = 1
-        value_embedding = self.bert.pooled_encode_batched(id2value, layer=best_layer, batch_size=128,
-                                                          save_gpu_memory=True)
-        value_embedding = value_embedding.numpy()
-        return value_embedding, id2value
-
-    def load_value(self, value_seqs, value_embedding_cache_path, id2value_cache_path):
-        if value_embedding_cache_path.exists() and id2value_cache_path.exists():
-            value_embedding = np.load(value_embedding_cache_path)
-            with open(id2value_cache_path, 'r', encoding='utf8', errors='ignore') as f:
-                id2value = json.load(f)
-            print_time_info("Loaded value embedding from %s." % value_embedding_cache_path)
-            print_time_info("Loaded values from %s." % id2value_cache_path)
-        else:
-            value_embedding, id2value = self.encode_value(value_seqs)
-            np.save(value_embedding_cache_path, value_embedding)
-            with open(id2value_cache_path, 'w', encoding='utf8', errors='ignore') as f:
-                json.dump(id2value, f, ensure_ascii=False)
-        assert len(value_embedding) == len(id2value)
-        return value_embedding, id2value
-
-
 class LoadData(object):
     def __init__(self, train_seeds_ratio, directory, nega_sample_num, name_channel,
-                 attribute_channel, digit_literal_channel, load_new_seed_split=False, device='cpu'):
+                 attribute_channel, digit_literal_channel, time_channel,
+                 load_new_seed_split=False,
+                 device='cpu'):
         self.device = device
         self.directory = directory
         self.nega_sample_num = nega_sample_num
@@ -381,8 +281,8 @@ class LoadData(object):
         self.load_structure_feature()
         if name_channel:
             self.load_name_feature()
-        if attribute_channel or digit_literal_channel:
-            self.load_attribute_feature(attribute_channel, digit_literal_channel)
+        if attribute_channel or digit_literal_channel or time_channel:
+            self.load_attribute_feature(attribute_channel, digit_literal_channel, time_channel)
         self.negative_sample()
         self.to_torch()
 
@@ -403,6 +303,9 @@ class LoadData(object):
 
         sr_nega_sample = sr_nega_sample.reshape((-1, 1))
         tg_nega_sample = tg_nega_sample.reshape((-1, 1))
+
+        # sr_nega_sample = sr_nega_sample.to(self.device)
+        # tg_nega_sample = tg_nega_sample.to(self.device)
         self.train_sr_ent_seeds = torch.cat((self.sr_posi_sample, sr_nega_sample), dim=1)
         self.train_tg_ent_seeds = torch.cat((self.tg_posi_sample, tg_nega_sample), dim=1)
 
@@ -422,7 +325,6 @@ class LoadData(object):
         self.att_num = len(self.att2id)
         self.triples_sr, self.id2entity_sr, self.id2relation_sr = _load_language(self.directory, self.language_sr)
         self.triples_tg, self.id2entity_tg, self.id2relation_tg = _load_language(self.directory, self.language_tg)
-
         self.sr_ent_num = len(self.id2entity_sr)
         self.tg_ent_num = len(self.id2entity_tg)
 
@@ -464,7 +366,7 @@ class LoadData(object):
         self.test_sr_ent_seeds = np.asarray(test_sr_ent_seeds)
         self.test_tg_ent_seeds = np.asarray(test_tg_ent_seeds)
 
-    def load_attribute_feature(self, load_attribute, load_digit_literal):
+    def load_attribute_feature(self, load_attribute, load_digit_literal, time_channel):
         directory = self.directory
         language_sr = self.language_sr
         language_tg = self.language_tg
@@ -506,22 +408,158 @@ class LoadData(object):
                     attribute_triples_tg.append((ent_id, val, att))
             self.attribute_triples_tg = torch.tensor(attribute_triples_tg)
 
+        if time_channel:
+            train_value_and_attribute_sr = _get_train_value_and_attribute(self.train_sr_ent_seeds_ori, att_triples_sr)
+            train_value_and_attribute_tg = _get_train_value_and_attribute(self.train_tg_ent_seeds_ori, att_triples_tg)
+
+            time_threshold = 0.5
+            time_att2id = _split_time_attribute(
+                train_value_and_attribute_sr + train_value_and_attribute_tg, time_threshold,
+                set(self.att2id.keys()))
+
+            # manually insert a virtual edge label
+            time_att2id['Value_Edge'] = len(time_att2id)
+            self.VALUE_LABEL_ID = time_att2id['Value_Edge']
+            self.time_att2id = time_att2id
+            self.time_att_num = len(time_att2id)
+
+            time_triples_sr = list(set(_split_time_triple(att_triples_sr, time_att2id)))
+            time_triples_tg = list(set(_split_time_triple(att_triples_tg, time_att2id)))
+
+            print('------------------')
+            print_time_info('time attribute number: %d' % (len(time_att2id)))
+            print_time_info('time triple number: %d, %d' % (len(time_triples_sr), len(time_triples_tg)))
+            print('------------------')
+
+            time_ent_id_seq_sr, time_att_id_seq_sr, time_value_seq_sr = transform_triple2seq(time_triples_sr,
+                                                                                             language_sr, False)
+            time_ent_id_seq_tg, time_att_id_seq_tg, time_value_seq_tg = transform_triple2seq(time_triples_tg,
+                                                                                             language_tg, False)
+
+            time_value_embed_cache_path, time_id2value_cache_path = get_cache_file_path(temp_file_dir, 'Time')
+            self.time_value_embedding, self.time_id2value = value_embed_encoder.load_value(
+                time_value_seq_sr + time_value_seq_tg, time_value_embed_cache_path,
+                time_id2value_cache_path)
+            time_value2id = {value: idx for idx, value in enumerate(self.time_id2value)}
+
+            time_value_id_seq_sr = [[time_value2id.get(value, time_value2id['[PAD]']) for value in value_seq] for
+                                    value_seq in time_value_seq_sr]
+            time_value_id_seq_tg = [[time_value2id.get(value, time_value2id['[PAD]']) for value in value_seq] for
+                                    value_seq in time_value_seq_tg]
+
+            time_triples_sr = []
+            for ent_id, att_seq, val_seq in zip(time_ent_id_seq_sr, time_att_id_seq_sr, time_value_id_seq_sr):
+                for att, val in zip(att_seq, val_seq):
+                    time_triples_sr.append((ent_id, val, att))
+            time_triples_tg = []
+            for ent_id, att_seq, val_seq in zip(time_ent_id_seq_tg, time_att_id_seq_tg, time_value_id_seq_tg):
+                for att, val in zip(att_seq, val_seq):
+                    time_triples_tg.append((ent_id, val, att))
+
+            # time_triples_sr = list(set(time_triples_sr))
+            # time_triples_tg = list(set(time_triples_tg))
+            time_triples_sr.sort(key=lambda x: self.time_id2value[x[2]], reverse=False)
+            self.time_triples_sr = torch.tensor(time_triples_sr)
+
+            time_triples_tg.sort(key=lambda x: self.time_id2value[x[2]], reverse=False)
+            self.time_triples_tg = torch.tensor(time_triples_tg)
+
+            self.clusterModel = ClusterModel(self.device,
+                                             self.directory,
+                                             self.time_triples_sr,
+                                             self.time_triples_tg,
+                                             self.time_att2id)
+            self.clusters = self.clusterModel.get_clusters()
+
+            ent_value_edge_sr = build_entity_and_value_edges(self.sr_ent_num, time_triples_sr)
+            ent_value_edge_tg = build_entity_and_value_edges(self.tg_ent_num, time_triples_tg)
+            value_edges_sr, edge_attrs_sr = build_value_edges_in_cluster(self.sr_ent_num,
+                                                                         self.time_id2value,
+                                                                         time_triples_sr, self.clusters)
+            value_edges_tg, edge_attrs_tg = build_value_edges_in_cluster(self.tg_ent_num,
+                                                                         self.time_id2value,
+                                                                         time_triples_tg, self.clusters)
+            self.time_graph_ent_value_edges_sr = torch.tensor(ent_value_edge_sr)
+            self.time_graph_ent_value_edges_tg = torch.tensor(ent_value_edge_tg)
+            self.time_graph_value_value_edges_sr = torch.tensor(value_edges_sr)
+            self.time_graph_value_value_edges_tg = torch.tensor(value_edges_tg)
+
+            dy_value_edges_sr, dy_value_edge_attrs_sr = build_dynamic_time_graphs(self.sr_ent_num,
+                                                                                  self.time_id2value,
+                                                                                  time_triples_sr,
+                                                                                  self.clusters)
+            dy_value_edges_tg, dy_value_edge_attrs_tg = build_dynamic_time_graphs(self.tg_ent_num,
+                                                                                  self.time_id2value,
+                                                                                  time_triples_tg,
+                                                                                  self.clusters)
+            self.dy_value_edges_sr = [torch.tensor(x) for x in dy_value_edges_sr]
+            self.dy_value_edge_attrs_sr = [torch.tensor(x) for x in dy_value_edge_attrs_sr]
+            self.dy_value_edges_tg = [torch.tensor(x) for x in dy_value_edges_tg]
+            self.dy_value_edge_attrs_tg = [torch.tensor(x) for x in dy_value_edge_attrs_tg]
+
+            def concate_all_seq(time_triples, idx):
+                seqs = []
+                for triple in time_triples:
+                    seqs.append(triple[idx])
+                return seqs
+
+            ent_val_ids_sr = concate_all_seq(time_triples_sr, 2)
+            ent_val_ids_tg = concate_all_seq(time_triples_tg, 2)
+            val_edge_ids_sr = [self.VALUE_LABEL_ID] * len(value_edges_sr)
+            val_edge_ids_tg = [self.VALUE_LABEL_ID] * len(value_edges_tg)
+            self.time_graph_ent_value_edge_labels_sr = torch.tensor(ent_val_ids_sr)
+            self.time_graph_ent_value_edge_labels_tg = torch.tensor(ent_val_ids_tg)
+            self.time_graph_value_attr_value_labels_sr = torch.tensor(edge_attrs_sr)
+            self.time_graph_value_attr_value_labels_tg = torch.tensor(edge_attrs_tg)
+            self.time_graph_value_value_edge_labels_sr = torch.tensor(val_edge_ids_sr)
+            self.time_graph_value_value_edge_labels_tg = torch.tensor(val_edge_ids_tg)
+            self.time_graph_sr = {
+                'ent_value_edges': self.time_graph_ent_value_edges_sr,
+                'value_value_edges': self.time_graph_value_value_edges_sr,
+                'ent_value_edge_labels': self.time_graph_ent_value_edge_labels_sr,
+                'value_attr_value_labels': self.time_graph_value_attr_value_labels_sr,
+                'value_value_edge_labels': self.time_graph_value_value_edge_labels_sr,
+                'dy_value_edges': self.dy_value_edges_sr,
+                'dy_value_edge_attrs': self.dy_value_edge_attrs_sr
+            }
+            self.time_graph_tg = {
+                'ent_value_edges': self.time_graph_ent_value_edges_tg,
+                'value_value_edges': self.time_graph_value_value_edges_tg,
+                'ent_value_edge_labels': self.time_graph_ent_value_edge_labels_tg,
+                'value_attr_value_labels': self.time_graph_value_attr_value_labels_tg,
+                'value_value_edge_labels': self.time_graph_value_value_edge_labels_tg,
+                'dy_value_edges': self.dy_value_edges_tg,
+                'dy_value_edge_attrs': self.dy_value_edge_attrs_tg
+            }
+            self.time_graph = {
+                'sr': self.time_graph_sr,
+                'tg': self.time_graph_tg
+            }
+            print_time_info('finish loading time info.')
+
         if load_digit_literal:
             train_value_and_attribute_sr = _get_train_value_and_attribute(self.train_sr_ent_seeds_ori, att_triples_sr)
             train_value_and_attribute_tg = _get_train_value_and_attribute(self.train_tg_ent_seeds_ori, att_triples_tg)
 
             digit_threshold = 0.5
             digit_att2id, literal_att2id = _split_digit_attribute_and_literal_attribute(
-                train_value_and_attribute_sr + train_value_and_attribute_tg, digit_threshold, set(self.att2id.keys()))
+                train_value_and_attribute_sr + train_value_and_attribute_tg,
+                digit_threshold, set(self.att2id.keys()))
+
             self.digit_att2id = digit_att2id
             self.literal_att2id = literal_att2id
             self.digit_att_num = len(digit_att2id)
             self.literal_att_num = len(literal_att2id)
+
             digit_triples_sr, literal_triples_sr = _split_digit_and_literal_triple(att_triples_sr, digit_att2id,
                                                                                    literal_att2id)
             digit_triples_tg, literal_triples_tg = _split_digit_and_literal_triple(att_triples_tg, digit_att2id,
                                                                                    literal_att2id)
 
+            print_time_info('digit attribute number: %d' % (len(self.digit_att2id)))
+            print_time_info('digit triple number: %d, %d' % (len(digit_triples_sr), len(digit_triples_tg)))
+            print_time_info('literal attribute number: %d' % (len(self.literal_att2id)))
+            print_time_info('literal triple number: %d, %d' % (len(digit_triples_tg), len(literal_triples_tg)))
             digit_ent_id_seq_sr, digit_att_id_seq_sr, digit_value_seq_sr = transform_triple2seq(digit_triples_sr,
                                                                                                 language_sr, False)
             digit_ent_id_seq_tg, digit_att_id_seq_tg, digit_value_seq_tg = transform_triple2seq(digit_triples_tg,
@@ -531,7 +569,9 @@ class LoadData(object):
                 literal_triples_sr, language_sr, False)
             literal_ent_id_seq_tg, literal_att_id_seq_tg, literal_value_seq_tg = transform_triple2seq(
                 literal_triples_tg, language_tg, False)
-            literal_value_embed_cache_path, literal_id2value_cache_path = get_cache_file_path(temp_file_dir, 'Literal')
+
+            literal_value_embed_cache_path, literal_id2value_cache_path = get_cache_file_path(temp_file_dir,
+                                                                                              'Literal')
             digit_value_embed_cache_path, digit_id2value_cache_path = get_cache_file_path(temp_file_dir, 'Digit')
 
             self.literal_value_embedding, self.literal_id2value = value_embed_encoder.load_value(
@@ -549,19 +589,23 @@ class LoadData(object):
             digit_value_id_seq_tg = [[digit_value2id.get(value, digit_value2id['[PAD]']) for value in value_seq] for
                                      value_seq in digit_value_seq_tg]
 
-            literal_value_id_seq_sr = [[literal_value2id.get(value, literal_value2id['[PAD]']) for value in value_seq]
-                                       for value_seq in literal_value_seq_sr]
-            literal_value_id_seq_tg = [[literal_value2id.get(value, literal_value2id['[PAD]']) for value in value_seq]
-                                       for value_seq in literal_value_seq_tg]
+            literal_value_id_seq_sr = [
+                [literal_value2id.get(value, literal_value2id['[PAD]']) for value in value_seq]
+                for value_seq in literal_value_seq_sr]
+            literal_value_id_seq_tg = [
+                [literal_value2id.get(value, literal_value2id['[PAD]']) for value in value_seq]
+                for value_seq in literal_value_seq_tg]
 
             literal_triples_sr = []
-            for ent_id, att_seq, val_seq in zip(literal_ent_id_seq_sr, literal_att_id_seq_sr, literal_value_id_seq_sr):
+            for ent_id, att_seq, val_seq in zip(literal_ent_id_seq_sr, literal_att_id_seq_sr,
+                                                literal_value_id_seq_sr):
                 for att, val in zip(att_seq, val_seq):
                     literal_triples_sr.append((ent_id, val, att))
             self.literal_triples_sr = torch.tensor(literal_triples_sr)
 
             literal_triples_tg = []
-            for ent_id, att_seq, val_seq in zip(literal_ent_id_seq_tg, literal_att_id_seq_tg, literal_value_id_seq_tg):
+            for ent_id, att_seq, val_seq in zip(literal_ent_id_seq_tg, literal_att_id_seq_tg,
+                                                literal_value_id_seq_tg):
                 for att, val in zip(att_seq, val_seq):
                     literal_triples_tg.append((ent_id, val, att))
             self.literal_triples_tg = torch.tensor(literal_triples_tg)
