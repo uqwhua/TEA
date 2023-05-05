@@ -1,4 +1,4 @@
-# TEA: Time-aware Entity Alignment in Knowledge Graphs
+# [TEA: Time-aware Entity Alignment in Knowledge Graphs](https://dl.acm.org/doi/10.1145/3543507.3583317)
 Source code of paper "TEA: Time-aware Entity Alignment in Knowledge Graphs", which has been accepted by TheWebConf'2023.
 
 ## Environment and Dependencies
@@ -45,10 +45,10 @@ If you find our TEA model and the experimental results useful, please kindly cit
 ```
 @inproceedings{liu2023tea,
   author = {Liu, Yu and Hua, Wen and Xin, Kexuan and Hosseini, Saeid and Zhou, Xiaofang},
-  title = {TEA: Time-aware Entity Alignment in Knowledge Graphs},
+  title = {TEA: Time-Aware Entity Alignment in Knowledge Graphs},
   booktitle = {Proceedings of the ACM Web Conference 2023},
   series = {WWW'23},
-  pages = {},
+  pages = {2591–2599},
   location = {Austin, Texas, USA},
   year = {2023},
   doi = {10.1145/3543507.3583317}
